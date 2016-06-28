@@ -14,7 +14,7 @@ MDIR  := media
 INST  := $(PROJ)-$(VA)_$(VB)
 
 # extra stuff we should back up
-EXTRA :=
+EXTRA := $(MDIR)/Penguin.ico $(MDIR)/Penguin.ico.txt $(MDIR)/Penguin.link.d.jpeg
 ICON  := Penguin.ico
 RSRC  := Pengiun.rsrc
 
@@ -70,7 +70,7 @@ clean:
 
 backup:
 	@mkdir -p $(BACK)
-	zip $(BACK)/$(INST)-`date +%Y-%m-%dT%H%M%S`$(BRGS).zip readme.txt gpl.txt copying.txt Makefile $(SRCS) $(H) $(SDIR)/$(ICON) $(EXTRA)
+	zip $(BACK)/$(INST)-`date +%Y-%m-%dT%H%M%S`$(BRGS).zip readme.txt gpl.txt copying.txt Makefile $(SRCS) $(H) $(EXTRA)
 	#git commit -am "$(ARGS)"
 
 icon: default
