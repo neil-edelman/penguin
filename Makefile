@@ -8,12 +8,15 @@ VB    := 0
 SDIR  := src
 BDIR  := bin
 BACK  := backup
+MDIR  := media
 
 # files in bdir
 INST  := $(PROJ)-$(VA)_$(VB)
 
 # extra stuff we should back up
 EXTRA :=
+ICON  := Penguin.ico
+RSRC  := Pengiun.rsrc
 
 # John Graham-Cumming:
 # rwildcard is a recursive wildcard
