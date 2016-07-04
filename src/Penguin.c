@@ -1,7 +1,7 @@
 /** 2016 Neil Edelman
  <p>
  This unpacks the CRON and MISN data files from EVNEW's export to text for
- GraphViz.
+ GraphViz. Assumes and-positives and or-negatives like in the stock game.
 
  @author	Neil
  @version	1.1; 2016-05
@@ -38,10 +38,15 @@ static const int misns_size = sizeof misns / sizeof(struct Misn);
 static struct Cron crons[2048]; /* unsure of the bound -- I saw it somewhere */
 static const int crons_size = sizeof crons / sizeof(struct Cron);
 
+static struct List *ignore_bits;
+
 /* private prototypes */
 
-static void print_bit(const int *const pb);
-static void print_bits(struct List *const list);
+int different(int *const misn_no, int *const compare);
+int list_contains_int(struct List *const l, const int i);
+static void print_int(const int *const pb);
+static void print_ints(struct List *const list);
+static void print_bit(struct Bit *const b);
 static void parse_resource(void *const reso, const struct Helper *const helper, const int helper_size);
 static void parse_bits(const char *const from, struct Cluster *const b, struct Cluster *const m, const size_t bit_misn_cluster, const int misn);
 static void cluster_add_bit(struct Cluster *const c, const int is_set, const int bit, const size_t bit_misn_cluster, const int misn);
@@ -54,31 +59,56 @@ static void usage(void);
 
 /* functions */
 
-/** Contains in list? !list.forEach(&different)
+/** Contains in list? @see{list_contains_int}
  @implements	ListPredicate */
-int different(int *const misn_no, int *const compare) { return *misn_no != *compare; }
+int different(int *const misn_no, int *const compare) {
+	return *misn_no != *compare;
+}
+
+/** Only call it on int lists! */
+int list_contains_int(struct List *const l, const int i) {
+	return !ListShortCircuit(l, (ListPredicate)&different, (int *)&i);
+}
 
 /** See @see{print_bits}.
  @implements	ListAction */
-static void print_bit(const int *const pb) { fprintf(stderr, " %d", *pb); }
+static void print_int(const int *const pb) { fprintf(stderr, " %d", *pb); }
 
 /** Prints list<int> on stderr. */
-static void print_bits(struct List *const list) {
+static void print_ints(struct List *const list) {
 	if(!list) {
 		fprintf(stderr, "0");
 		return;
 	}
 	fprintf(stderr, "[");
-	ListForEach(list, (ListAction)&print_bit);
+	ListForEach(list, (ListAction)&print_int);
 	fprintf(stderr, " ]");
 }
 
 static void print_cluster(struct Cluster *const cluster) {
 	fprintf(stderr, "<");
-	print_bits(cluster->set);
+	print_ints(cluster->set);
 	fprintf(stderr, ",!");
-	print_bits(cluster->clear);
+	print_ints(cluster->clear);
 	fprintf(stderr, ">");
+}
+
+static void print_bit(struct Bit *const b) {
+	const struct Helper *help;
+	int i;
+
+	if(!b) {
+		fprintf(stderr, "<null>\n");
+		return;
+	}
+	fprintf(stderr, "bit%d is %s\n", b->bit, b->is_used ? "used" : "not used");
+	if(!b->is_used) return;
+	for(i = 0; i < misn_helper_size; i++) {
+		help = misn_helper + i;
+		fprintf(stderr, "\t%s: ", help->name);
+		print_cluster((struct Cluster *)((char *)b + help->bit_resource_cluster));
+		fprintf(stderr, "\n");
+	}
 }
 
 /** This parses the bits that are in the Helper. */
@@ -90,7 +120,7 @@ static void parse_resource(void *const reso, const struct Helper *const helper, 
 		(struct Cluster *)((char *)reso + helper[i].bit_cluster),
 		helper[i].misn_cluster ?
 			(struct Cluster *)((char *)reso + helper[i].misn_cluster) : 0,
-		helper->bit_resource_cluster, misn);
+		helper[i].bit_resource_cluster, misn);
 }
 
 /** Parse from and stick in into b and m. */
@@ -298,10 +328,46 @@ int main(int argc, char **argv) {
 
 	/* get rid of stuff */
 
-	if(mode == M_REMOVE_USELESS || mode == M_STRICT) {
+	ignore_bits = List(sizeof(int));
+
+	/* ignore bits from cron, only the most obvious! (most famous b6666) */
+	for(i = 0; i < crons_size; i++) {
+		struct Cron *const cron = crons + i;
+		int is_start;
+		int *pstart, *pend, b;
+
+		if(cron->id != i) continue;
+		if(ListSize(cron->b_enable.set) != 1) continue;
+		if(ListSize(cron->b_enable.clear) != 0) continue;
+		if(ListSize(cron->b_start.clear) + ListSize(cron->b_end.clear) != 1) continue;
+		if(ListSize(cron->b_start.set) != 0 || ListSize(cron->b_end.set) != 0) continue;
+		is_start = (ListSize(cron->b_start.clear) == 1);
+		pstart = ListGet(cron->b_enable.set, 0);
+		pend = ListGet((ListSize(cron->b_start.clear) == 1) ? cron->b_start.clear : cron->b_end.clear, 0);
+		/* match */
+		if((b = *pstart) != *pend) continue;
+		/* misn's available set bits, than it can safely be ignored */
+		if(!ListSize(bits[b].misn_available.set)) ListAdd(ignore_bits, &b);
+	}
+	fprintf(stderr, "Cron ignore bits: ");
+	print_ints(ignore_bits);
+	fprintf(stderr, "\n");
+	
+	/* nodes who's out [+ in if M_ALL] degrees are zero */
+	for(i = mode > M_ALL ? M_ACCEPT : 0; i < misns_size; i++) {
+		struct Misn *const misn = misns + i;
+		int no = 0, field;
+		if(misn->id != i) continue;
+		for(field = 0; field < misn_helper_size; field++) {
+			struct Cluster *cluster = (struct Cluster *)((char *)misn + misn_helper[field].bit_cluster);
+			no += ListSize(cluster->set);
+			no += ListSize(cluster->clear);
+		}
+		if(!no) misn->id = 0;
 	}
 
-	if(mode == M_STRICT) {
+	/* 6666 */
+	if(mode > M_ALL) {
 	}
 
 	/* print all */
@@ -309,7 +375,7 @@ int main(int argc, char **argv) {
 	printf("digraph misn {\n\n");
 
 	/* print bits for all used bits */
-	printf("node [shape=plain style=dotted fillcolor=\"#11EE115f\"];\n");
+	printf("node [constraint=false shape=plain style=dotted fillcolor=\"#11EE115f\"];\n");
 	for(i = 0; i < bits_size; i++) {
 		if(!bits[i].is_used) continue;
 		printf("bit%d [label=\"%d\"];\n", i, i);
@@ -350,26 +416,28 @@ int main(int argc, char **argv) {
 
 	printf("}\n");
 
-	for(i = 0; i < bits_size; i++) {
-		if(!bits[i].is_used) continue;
-		fprintf(stderr, "b%d.available: ", i);
-		print_cluster(&bits[i].misn_available);
-		fprintf(stderr, "\n");
-	}
-
 	return EXIT_SUCCESS;
 }
 
-/** if the sub_label is 0, then assumes edge is incedent */
+/** if the sub_label is 0, then assumes edge is incedent
+ FIXME: remove stuff before this */
 static void print_edges(const int vertex, const struct Cluster *const bit, const struct Cluster *const misn, const char *const label, const char *const sub_label) {
 	int *pb, *pm;
 
 	if(sub_label) {
 		/* set expression */
 		while((pb = ListIterate(bit->set))) {
+			if(list_contains_int(ignore_bits, *pb)) {
+				fprintf(stderr, "Ignoring Misn%d set b%d.\n", vertex, *pb);
+				continue;
+			}
 			printf("%s%d:%s -> bit%d;\n", label, vertex, sub_label, *pb);
 		}
 		while((pb = ListIterate(bit->clear))) {
+			if(list_contains_int(ignore_bits, *pb)) {
+				fprintf(stderr, "Ignoring Misn%d set b%d.\n", vertex, *pb);
+				continue;
+			}
 			printf("%s%d:%s -> bit%d [color=red arrowhead=empty style=dashed];\n", label, vertex, sub_label, *pb);
 		}
 		/* print edges that start automatically */
@@ -383,9 +451,17 @@ static void print_edges(const int vertex, const struct Cluster *const bit, const
 	} else {
 		/* test expression -- edge incident to node */
 		while((pb = ListIterate(bit->set))) {
+			if(list_contains_int(ignore_bits, *pb)) {
+				fprintf(stderr, "Ignoring Misn%d test set b%d.\n", vertex, *pb);
+				continue;
+			}		
 			printf("bit%d -> %s%d;\n", *pb, label, vertex);
 		}
 		while((pb = ListIterate(bit->clear))) {
+			if(list_contains_int(ignore_bits, *pb)) {
+				fprintf(stderr, "Ignoring Misn%d test clear b%d.\n", vertex, *pb);
+				continue;
+			}
 			printf("bit%d -> %s%d [color=red arrowhead=empty style=dashed];\n", *pb, label, vertex);
 		}
 	}
@@ -435,6 +511,8 @@ static void usage(void) {
 	fprintf(stderr, "1.0.1; the output file, eg, allmisns.gv, is a GraphViz file; see\n");
 	fprintf(stderr, "http://www.graphviz.org/. Then one could get a graph,\n\n");
 	fprintf(stderr, "dot (or fdp, etc) allmisns.gv -O -Tpdf, or use the GUI.\n\n");
+	fprintf(stderr, "Assumes all positive bits can be grouped in a minterm and all negative bits a\n");
+	fprintf(stderr, "maxterm; this is true for stock EV:Nova.\n\n");
 	fprintf(stderr, "Version %d.%d.\n", versionMajor, versionMinor);
 	fprintf(stderr, "%s Copyright %s Neil Edelman\n\n", programme, year);
 }

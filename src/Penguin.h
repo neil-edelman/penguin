@@ -121,20 +121,21 @@ struct Cron {
 
 /* records the things that go together */
 static const struct Helper {
+	char *name;
 	enum Where where;
 	size_t raw, bit_cluster, misn_cluster;
 	size_t bit_resource_cluster;
 } misn_helper[] = {
-	{ M_AVAILABLE, offsetof(struct Misn, available_bits), offsetof(struct Misn, b_available), 0, offsetof(struct Bit, misn_available) },
-	{ M_ACCEPT, offsetof(struct Misn, on_accept), offsetof(struct Misn, b_accept), offsetof(struct Misn, misn_accept), offsetof(struct Bit, misn_accept) },
-	{ M_REFUSE, offsetof(struct Misn, on_refuse), offsetof(struct Misn, b_refuse), offsetof(struct Misn, misn_refuse), offsetof(struct Bit, misn_refuse) },
-	{ M_SUCCESS, offsetof(struct Misn, on_success), offsetof(struct Misn, b_success), offsetof(struct Misn, misn_success), offsetof(struct Bit, misn_success) },
-	{ M_ABORT, offsetof(struct Misn, on_abort), offsetof(struct Misn, b_abort), offsetof(struct Misn, misn_abort), offsetof(struct Bit, misn_abort) },
-	{ M_SHIP, offsetof(struct Misn, on_ship_done), offsetof(struct Misn, b_ship), offsetof(struct Misn, misn_ship), offsetof(struct Bit, misn_ship) }
+	{ "available", M_AVAILABLE, offsetof(struct Misn, available_bits), offsetof(struct Misn, b_available), 0, offsetof(struct Bit, misn_available) },
+	{ "accept", M_ACCEPT, offsetof(struct Misn, on_accept), offsetof(struct Misn, b_accept), offsetof(struct Misn, misn_accept), offsetof(struct Bit, misn_accept) },
+	{ "refuse", M_REFUSE, offsetof(struct Misn, on_refuse), offsetof(struct Misn, b_refuse), offsetof(struct Misn, misn_refuse), offsetof(struct Bit, misn_refuse) },
+	{ "success", M_SUCCESS, offsetof(struct Misn, on_success), offsetof(struct Misn, b_success), offsetof(struct Misn, misn_success), offsetof(struct Bit, misn_success) },
+	{ "abort", M_ABORT, offsetof(struct Misn, on_abort), offsetof(struct Misn, b_abort), offsetof(struct Misn, misn_abort), offsetof(struct Bit, misn_abort) },
+	{ "on_ship_done", M_SHIP, offsetof(struct Misn, on_ship_done), offsetof(struct Misn, b_ship), offsetof(struct Misn, misn_ship), offsetof(struct Bit, misn_ship) }
 }, cron_helper[] = {
-	{ C_ENABLE, offsetof(struct Cron, enable_on), offsetof(struct Cron, b_enable), 0, offsetof(struct Bit, cron_enable) },
-	{ C_START, offsetof(struct Cron, on_start), offsetof(struct Cron, b_start), 0, offsetof(struct Bit, cron_start) },
-	{ C_END, offsetof(struct Cron, on_end), offsetof(struct Cron, b_end), 0, offsetof(struct Bit, cron_end) }
+	{ "enable", C_ENABLE, offsetof(struct Cron, enable_on), offsetof(struct Cron, b_enable), 0, offsetof(struct Bit, cron_enable) },
+	{ "start", C_START, offsetof(struct Cron, on_start), offsetof(struct Cron, b_start), 0, offsetof(struct Bit, cron_start) },
+	{ "end", C_END, offsetof(struct Cron, on_end), offsetof(struct Cron, b_end), 0, offsetof(struct Bit, cron_end) }
 };
 static const int misn_helper_size = sizeof misn_helper / sizeof(struct Helper);
 static const int cron_helper_size = sizeof cron_helper / sizeof(struct Helper);
