@@ -8,10 +8,9 @@ enum Type { T_MISN, T_CRON };
 enum Where { M_AVAILABLE, M_ACCEPT, M_REFUSE, M_SUCCESS, M_ABORT, M_SHIP, C_ENABLE, C_START, C_END };
 
 struct Bit {
-	
 	int is_used;
+
 	int bit;
-	
 	struct Cluster misn_available;
 	struct Cluster misn_accept;
 	struct Cluster misn_refuse;
@@ -25,6 +24,8 @@ struct Bit {
 };
 
 struct Misn {
+	int is_used;
+
 	int id;
 	char name[128];
 	int available_stellar;
@@ -86,6 +87,8 @@ struct Misn {
 };
 
 struct Cron {
+	int is_used;
+
 	int id;
 	char name[128];
 	int first_day;

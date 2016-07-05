@@ -2,6 +2,9 @@
  <p>
  This unpacks the CRON and MISN data files from EVNEW's export to text for
  GraphViz. Assumes and-positives and or-negatives like in the stock game.
+ <p>
+ I'm realising I should have done the in Java. It would have been so much more
+ elegant.
 
  @author	Neil
  @version	1.1; 2016-05
@@ -38,20 +41,24 @@ static const int misns_size = sizeof misns / sizeof(struct Misn);
 static struct Cron crons[2048]; /* unsure of the bound -- I saw it somewhere */
 static const int crons_size = sizeof crons / sizeof(struct Cron);
 
-static struct List *ignore_bits;
-
 /* private prototypes */
 
-int different(int *const misn_no, int *const compare);
+int different(int *const a, int *const b);
+int same(int *const a, int *const b);
 int list_contains_int(struct List *const l, const int i);
 static void print_int(const int *const pb);
 static void print_ints(struct List *const list);
 static void print_bit(struct Bit *const b);
+static void print_misn(struct Misn *const m);
+static void print_cron(struct Cron *const c);
 static void parse_resource(void *const reso, const struct Helper *const helper, const int helper_size);
 static void parse_bits(const char *const from, struct Cluster *const b, struct Cluster *const m, const size_t bit_misn_cluster, const int misn);
 static void cluster_add_bit(struct Cluster *const c, const int is_set, const int bit, const size_t bit_misn_cluster, const int misn);
 static void cluster_add_misn(struct Cluster *const c, const int is_set, const int misn);
+static void delete_bit_from_misn(struct Misn *const misn, int bit);
 
+void cull_bits_reset_by_crons(void);
+void cull_misns_out_degree_zero(void);
 static void print_edges(const int vertex, const struct Cluster *const bit, const struct Cluster *const misn, const char *const label, const char *const sub_label);
 static char *insert_scanf_useless_space(char *const str);
 static void escape(char *const string);
@@ -61,8 +68,12 @@ static void usage(void);
 
 /** Contains in list? @see{list_contains_int}
  @implements	ListPredicate */
-int different(int *const misn_no, int *const compare) {
-	return *misn_no != *compare;
+int different(int *const a, int *const b) {
+	return *a != *b;
+}
+
+int same(int *const a, int *const b) {
+	return *a == *b;
 }
 
 /** Only call it on int lists! */
@@ -101,12 +112,48 @@ static void print_bit(struct Bit *const b) {
 		fprintf(stderr, "<null>\n");
 		return;
 	}
-	fprintf(stderr, "bit%d is %s\n", b->bit, b->is_used ? "used" : "not used");
+	fprintf(stderr, "Bit%d is %s\n", b->bit, b->is_used ? "used" : "not used");
 	if(!b->is_used) return;
 	for(i = 0; i < misn_helper_size; i++) {
 		help = misn_helper + i;
 		fprintf(stderr, "\t%s: ", help->name);
 		print_cluster((struct Cluster *)((char *)b + help->bit_resource_cluster));
+		fprintf(stderr, "\n");
+	}
+}
+
+static void print_misn(struct Misn *const m) {
+	const struct Helper *help;
+	int i;
+
+	if(!m) {
+		fprintf(stderr, "<null>\n");
+		return;
+	}
+	fprintf(stderr, "Misn%d is %s\n", m->id, m->is_used ? "used" : "not used");
+	if(!m->is_used) return;
+	for(i = 0; i < misn_helper_size; i++) {
+		help = misn_helper + i;
+		fprintf(stderr, "\t%s: ", help->name);
+		print_cluster((struct Cluster *)((char *)m + help->bit_cluster));
+		fprintf(stderr, "\n");
+	}
+}
+
+static void print_cron(struct Cron *const c) {
+	const struct Helper *help;
+	int i;
+
+	if(!c) {
+		fprintf(stderr, "<null>\n");
+		return;
+	}
+	fprintf(stderr, "Cron%d is %s\n", c->id, c->is_used ? "used" : "not used");
+	if(!c->is_used) return;
+	for(i = 0; i < cron_helper_size; i++) {
+		help = cron_helper + i;
+		fprintf(stderr, "\t%s: ", help->name);
+		print_cluster((struct Cluster *)((char *)c + help->bit_cluster));
 		fprintf(stderr, "\n");
 	}
 }
@@ -247,6 +294,19 @@ static void cluster_add_misn(struct Cluster *const c, const int is_set, const in
 	ListAdd(*ppm, &misn);
 }
 
+static void delete_bit_from_misn(struct Misn *const misn, int bit) {
+	struct Cluster *cluster;
+	int no = 0, i;
+
+	if(!misn->is_used) return;
+	for(i = 0; i < misn_helper_size; i++) {
+		cluster = (struct Cluster *)((char *)misn + misn_helper[i].bit_cluster);
+		no += ListRemoveIf(cluster->set, (ListPredicate)&same, &bit);
+		no += ListRemoveIf(cluster->clear, (ListPredicate)&same, &bit);
+	}
+	/*if(no) fprintf(stderr, "removed %d b%d from Misn%d.\n", no, bit, misn->id);*/
+}
+
 /** Entry point.
  @return		Either EXIT_SUCCESS or EXIT_FAILURE. */
 int main(int argc, char **argv) {
@@ -276,7 +336,9 @@ int main(int argc, char **argv) {
 
 		/* zero temp */
 		memset(&c, 0, sizeof c);
+		c.is_used = -1;
 		memset(&m, 0, sizeof m);
+		m.is_used = -1;
 
 		if(sscanf(r, "\"cron\" %d \"%127[^\"]\" %d %d %d %d %d %d %d %d %d %d \"%127[^\"]\" \"%127[^\"]\" \"%127[^\"]\" %x %x %d %d %d %d %d %d %d %d %d %d \"EOR\"\n",
 			&c.id, c.name, &c.first_day, &c.first_month, &c.first_year,
@@ -291,7 +353,7 @@ int main(int argc, char **argv) {
 				continue;
 			}
 			escape(c.name);
-			
+
 			pc = crons + c.id;
 			memcpy(pc, &c, sizeof c);
 			parse_resource(pc, cron_helper, cron_helper_size);
@@ -328,47 +390,14 @@ int main(int argc, char **argv) {
 
 	/* get rid of stuff */
 
-	ignore_bits = List(sizeof(int));
+	cull_bits_reset_by_crons();
 
-	/* ignore bits from cron, only the most obvious! (most famous b6666) */
-	for(i = 0; i < crons_size; i++) {
-		struct Cron *const cron = crons + i;
-		int is_start;
-		int *pstart, *pend, b;
+	/* fixme: eg, 379: Report Mu'hari; Vellos24a: if it sets a bit and then clears it
+	 in success with no other bit being affected, then why bother */
 
-		if(cron->id != i) continue;
-		if(ListSize(cron->b_enable.set) != 1) continue;
-		if(ListSize(cron->b_enable.clear) != 0) continue;
-		if(ListSize(cron->b_start.clear) + ListSize(cron->b_end.clear) != 1) continue;
-		if(ListSize(cron->b_start.set) != 0 || ListSize(cron->b_end.set) != 0) continue;
-		is_start = (ListSize(cron->b_start.clear) == 1);
-		pstart = ListGet(cron->b_enable.set, 0);
-		pend = ListGet((ListSize(cron->b_start.clear) == 1) ? cron->b_start.clear : cron->b_end.clear, 0);
-		/* match */
-		if((b = *pstart) != *pend) continue;
-		/* misn's available set bits, than it can safely be ignored */
-		if(!ListSize(bits[b].misn_available.set)) ListAdd(ignore_bits, &b);
-	}
-	fprintf(stderr, "Cron ignore bits: ");
-	print_ints(ignore_bits);
-	fprintf(stderr, "\n");
-	
-	/* nodes who's out [+ in if M_ALL] degrees are zero */
-	for(i = mode > M_ALL ? M_ACCEPT : 0; i < misns_size; i++) {
-		struct Misn *const misn = misns + i;
-		int no = 0, field;
-		if(misn->id != i) continue;
-		for(field = 0; field < misn_helper_size; field++) {
-			struct Cluster *cluster = (struct Cluster *)((char *)misn + misn_helper[field].bit_cluster);
-			no += ListSize(cluster->set);
-			no += ListSize(cluster->clear);
-		}
-		if(!no) misn->id = 0;
-	}
+	/* cull crons that do not connect to misns */
 
-	/* 6666 */
-	if(mode > M_ALL) {
-	}
+	cull_misns_out_degree_zero();
 
 	/* print all */
 
@@ -386,7 +415,7 @@ int main(int argc, char **argv) {
 	printf("node [shape=Mrecord style=filled fillcolor=\"#1111EE5f\"];\n");
 	for(i = 0; i < misns_size; i++) {
 		pm = misns + i;
-		if(!pm->id) continue;
+		if(!pm->is_used) continue;
 		printf("misn%d [label=\"%d: %s|{<accept>accept|<refuse>refuse}|<ship>ship|{<success>success|<failure>failure|<abort>abort}\"];\n", pm->id, pm->id, pm->name);
 
 		print_edges(i, &pm->b_available, 0, "misn", 0);
@@ -404,7 +433,7 @@ int main(int argc, char **argv) {
 	printf("node [shape=record style=filled fillcolor=\"#EE11115f\"];\n");
 	for(i = 0; i < crons_size; i++) {
 		pc = crons + i;
-		if(!pc->id) continue;
+		if(!pc->is_used) continue;
 		printf("cron%d [label=\"%d: %s|{<start>start|<end>end}\"];\n", pc->id, pc->id, pc->name);
 
 		print_edges(i, &pc->b_enable, 0, "cron", 0);
@@ -419,49 +448,97 @@ int main(int argc, char **argv) {
 	return EXIT_SUCCESS;
 }
 
-/** if the sub_label is 0, then assumes edge is incedent
- FIXME: remove stuff before this */
+/** only the most obvious! (most famous b6666) */
+void cull_bits_reset_by_crons(void) {
+	struct List *ignore_bits = List(sizeof(int));
+	struct Misn *misn;
+	int i, *pbit;
+
+	/* first we must get the bits reset by crons */
+	for(i = 0; i < crons_size; i++) {
+		struct Cron *const cron = crons + i;
+		int is_start;
+		int *pstart, *pend, b;
+
+		if(!cron->is_used) continue;
+		if(ListSize(cron->b_enable.set) != 1) continue;
+		if(ListSize(cron->b_enable.clear) != 0) continue;
+		if(ListSize(cron->b_start.clear) + ListSize(cron->b_end.clear) != 1) continue;
+		if(ListSize(cron->b_start.set) != 0 || ListSize(cron->b_end.set) != 0) continue;
+		is_start = (ListSize(cron->b_start.clear) == 1);
+		pstart = ListGet(cron->b_enable.set, 0);
+		pend = ListGet((ListSize(cron->b_start.clear) == 1) ? cron->b_start.clear : cron->b_end.clear, 0);
+		/* match */
+		if((b = *pstart) != *pend) continue;
+		/* misn's available set bits, than it can safely be ignored */
+		if(!ListSize(bits[b].misn_available.set)) ListAdd(ignore_bits, &b);
+		cron->is_used = 0; /* we don't care about the cron */
+	}
+	fprintf(stderr, "Cron ignore bits: ");
+	print_ints(ignore_bits);
+	fprintf(stderr, "\n");
+
+	/* delete all misn bits that are in ignore_bits */
+	for(i = 0; i < misns_size; i++) {
+		misn = misns + i;
+		if(!misn->is_used) continue;
+		while((pbit = ListIterate(ignore_bits))) delete_bit_from_misn(misn, *pbit);
+	}
+	/* also delete the bits from bits */
+	while((pbit = ListIterate(ignore_bits))) bits[*pbit].is_used = 0;
+
+	List_(&ignore_bits);
+}
+
+/** nodes who's out degrees are zero are useless */
+void cull_misns_out_degree_zero(void) {
+	int i;
+
+	for(i = M_ACCEPT; i < misns_size; i++) {
+		struct Misn *const misn = misns + i;
+		int no = 0, field;
+		if(!misn->is_used) continue;
+		for(field = 0; field < misn_helper_size; field++) {
+			struct Cluster *cluster = (struct Cluster *)((char *)misn + misn_helper[field].bit_cluster);
+			no += ListSize(cluster->set);
+			no += ListSize(cluster->clear);
+		}
+		if(!no) misn->is_used = 0;
+	}
+}
+
+/** if the sub_label is 0, then assumes edge is incedent */
 static void print_edges(const int vertex, const struct Cluster *const bit, const struct Cluster *const misn, const char *const label, const char *const sub_label) {
 	int *pb, *pm;
 
 	if(sub_label) {
 		/* set expression */
 		while((pb = ListIterate(bit->set))) {
-			if(list_contains_int(ignore_bits, *pb)) {
-				fprintf(stderr, "Ignoring Misn%d set b%d.\n", vertex, *pb);
-				continue;
-			}
 			printf("%s%d:%s -> bit%d;\n", label, vertex, sub_label, *pb);
 		}
 		while((pb = ListIterate(bit->clear))) {
-			if(list_contains_int(ignore_bits, *pb)) {
-				fprintf(stderr, "Ignoring Misn%d set b%d.\n", vertex, *pb);
-				continue;
-			}
 			printf("%s%d:%s -> bit%d [color=red arrowhead=empty style=dashed];\n", label, vertex, sub_label, *pb);
 		}
 		/* print edges that start automatically */
 		if(!misn) return;
 		while((pm = ListIterate(misn->set))) {
+			if(!misns[*pm].is_used) continue;
 			printf("%s%d:%s -> misn%d [color=green];\n", label, vertex, sub_label, *pm);
 		}
 		while((pm = ListIterate(misn->clear))) {
+			if(!misns[*pm].is_used) continue;
 			printf("%s%d:%s -> misn%d [color=green arrowhead=empty style=dashed];\n", label, vertex, sub_label, *pm);
 		}
 	} else {
 		/* test expression -- edge incident to node */
 		while((pb = ListIterate(bit->set))) {
-			if(list_contains_int(ignore_bits, *pb)) {
-				fprintf(stderr, "Ignoring Misn%d test set b%d.\n", vertex, *pb);
-				continue;
-			}		
 			printf("bit%d -> %s%d;\n", *pb, label, vertex);
 		}
 		while((pb = ListIterate(bit->clear))) {
-			if(list_contains_int(ignore_bits, *pb)) {
+			/*if(list_contains_int(ignore_bits, *pb)) {
 				fprintf(stderr, "Ignoring Misn%d test clear b%d.\n", vertex, *pb);
 				continue;
-			}
+			}*/
 			printf("bit%d -> %s%d [color=red arrowhead=empty style=dashed];\n", *pb, label, vertex);
 		}
 	}
