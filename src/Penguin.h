@@ -27,7 +27,7 @@ struct Misn {
 	int is_used;
 
 	int id;
-	char name[128];
+	char name[1024];
 	int available_stellar;
 	int available_location;
 	int available_record;
@@ -85,6 +85,7 @@ struct Misn {
 	struct Cluster misn_accept, misn_refuse, misn_success, misn_failure, misn_abort, misn_ship;
 	
 };
+static const int misn_name_size = sizeof((struct Misn *)0)->name / sizeof(char);
 
 struct Cron {
 	int is_used;

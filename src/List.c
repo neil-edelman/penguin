@@ -41,6 +41,7 @@ struct List {
 	int    size;		/* the size of the list */
 	int    capacity[2];	/* Fibonacci, [0] is the capacity, [1] is the next */
 
+	/*ListMetric metric;	metric can be null */
 	char   *array;		/* the actual list, implemented as bytes * width */
 
 	char   *iterator;	/* controls iteration */
@@ -326,6 +327,52 @@ int ListRemoveIf(struct List *const l, const ListPredicate predicate, void *cons
 
 /* ----- */
 
+/** Attaches a metric to the list.
+ <p>
+ This would be awkward, because it destroys the symmetry of ListCompare */
+/*void ListMetric(const struct List *const l, const ListMetric metric) {
+	if(!l) return;
+	l->metric = metric;
+}*/
+
+/** Compares two lists element-by-element.
+ @param a, b	Two lists; can be null.
+ @param metric	The metric that is used; can be null, in which case, the length
+				of the lists is compared.
+ @return		The first metric that is not equal, or the size difference if
+				they are the same up to the lower size. */
+int ListCompare(const struct List *const a, const struct List *const b, const ListMetric metric) {
+	int limit, equal, i, diff;
+	char *n, *m;
+
+	/* null counts as less than a list */
+	if(!a) { return b ? -1 : 0; } else if(!b) { return 1; }
+
+	/* limit is the smaller size; if all others are equal, return equal */
+	equal = a->size - b->size;
+	if(!metric) return equal;
+	limit = a->size > b->size ? b->size : a->size;
+
+	/* O(n) */
+	for(i = 0, n = a->array, m = b->array; i < limit; i++, n += a->width, m += b->width) {
+		if((diff = metric(n, m))) return diff;
+	}
+
+	return equal;
+}
+
+/** "Sorts this list according to the order induced by the specified
+ Comparator."
+ @fixme			Lol! so slow! apply indirection.
+ @param l		The List.
+ @param metric	"Comparator used to compare list elements." */
+void ListSort(const struct List *const l, const ListMetric metric) {
+	if(!l || !metric) return;
+	qsort(l->array, l->size, l->width, metric);
+}
+
+/* ----- */
+
 /** Intended to be used inside a locked callback iteration.
  @return		The last index. */
 int ListIndex(const struct List *const l) {
@@ -519,15 +566,6 @@ void *ListSet(struct List *l, const int index, void *const element) {
 	l->array[index] = element;
 
 	return prev;
-}
-
-/** "Sorts this list according to the order induced by the specified
- Comparator."
- @param l		The List.
- @param c	"c - the Comparator used to compare list elements." */
-void ListSort(const struct List *l, int (* const c)(const void *, const void *)) {
-	if(!l || !c) return;
-	qsort(l->array, l->size, l->width, c);
 }
 
 /** "Trims the capacity of this List instance to be the list's current

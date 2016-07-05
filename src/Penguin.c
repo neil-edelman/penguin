@@ -26,10 +26,6 @@ static const char *year        = "2016";
 static const int versionMajor  = 1;
 static const int versionMinor  = 1;
 
-/* types */
-
-enum Mode { M_HELP, M_ALL, M_REMOVE_USELESS, M_STRICT };
-
 /* globals */
 
 static struct Bit bits[100001]; /* EV Bible: max 10000 */
@@ -43,9 +39,10 @@ static const int crons_size = sizeof crons / sizeof(struct Cron);
 
 /* private prototypes */
 
-int different(int *const a, int *const b);
-int same(int *const a, int *const b);
-int list_contains_int(struct List *const l, const int i);
+static int different(int *const a, int *const b);
+static int same(int *const a, int *const b);
+static int difference(int *const a, int *const b);
+static int list_contains_int(struct List *const l, const int i);
 static void print_int(const int *const pb);
 static void print_ints(struct List *const list);
 static void print_bit(struct Bit *const b);
@@ -56,9 +53,12 @@ static void parse_bits(const char *const from, struct Cluster *const b, struct C
 static void cluster_add_bit(struct Cluster *const c, const int is_set, const int bit, const size_t bit_misn_cluster, const int misn);
 static void cluster_add_misn(struct Cluster *const c, const int is_set, const int misn);
 static void delete_bit_from_misn(struct Misn *const misn, int bit);
+static void misn_sort_bits(struct Misn *const misn);
+static int misn_compare(const struct Misn *const a, const struct Misn *const b);
 
-void cull_bits_reset_by_crons(void);
-void cull_misns_out_degree_zero(void);
+static void cull_bits_reset_by_crons(void);
+static void cull_misns_out_degree_zero(void);
+static void merge_misns(void);
 static void print_edges(const int vertex, const struct Cluster *const bit, const struct Cluster *const misn, const char *const label, const char *const sub_label);
 static char *insert_scanf_useless_space(char *const str);
 static void escape(char *const string);
@@ -68,16 +68,22 @@ static void usage(void);
 
 /** Contains in list? @see{list_contains_int}
  @implements	ListPredicate */
-int different(int *const a, int *const b) {
+static int different(int *const a, int *const b) {
 	return *a != *b;
 }
 
-int same(int *const a, int *const b) {
+/** @implements	ListPredicate */
+static int same(int *const a, int *const b) {
 	return *a == *b;
 }
 
+/** @implements ListMetric */
+static int difference(int *const a, int *const b) {
+	return *a - *b;
+}
+
 /** Only call it on int lists! */
-int list_contains_int(struct List *const l, const int i) {
+static int list_contains_int(struct List *const l, const int i) {
 	return !ListShortCircuit(l, (ListPredicate)&different, (int *)&i);
 }
 
@@ -130,7 +136,7 @@ static void print_misn(struct Misn *const m) {
 		fprintf(stderr, "<null>\n");
 		return;
 	}
-	fprintf(stderr, "Misn%d is %s\n", m->id, m->is_used ? "used" : "not used");
+	fprintf(stderr, "Misn%d:<%s> is %s\n", m->id, m->name, m->is_used ? "used" : "not used");
 	if(!m->is_used) return;
 	for(i = 0; i < misn_helper_size; i++) {
 		help = misn_helper + i;
@@ -307,23 +313,49 @@ static void delete_bit_from_misn(struct Misn *const misn, int bit) {
 	/*if(no) fprintf(stderr, "removed %d b%d from Misn%d.\n", no, bit, misn->id);*/
 }
 
+/* unused */
+static void misn_sort_bits(struct Misn *const misn) {
+	struct Cluster *cluster;
+	int i;
+	
+	if(!misn->is_used) return;
+	for(i = 0; i < misn_helper_size; i++) {
+		cluster = (struct Cluster *)((char *)misn + misn_helper[i].bit_cluster);
+		ListSort(cluster->set, (ListMetric)&difference);
+		ListSort(cluster->clear, (ListMetric)&difference);
+	}
+}
+
+static int misn_compare(const struct Misn *const a, const struct Misn *const b) {
+	struct Cluster *acluster, *bcluster;
+	int i, diff;
+
+	if(!a->is_used) return b->is_used ? -1 : 0; else if(!b->is_used) return 1;
+
+	/* sort all misn bits */
+	for(i = 0; i < misn_helper_size; i++) {
+		acluster = (struct Cluster *)((char *)a + misn_helper[i].bit_cluster);
+		bcluster = (struct Cluster *)((char *)b + misn_helper[i].bit_cluster);
+		ListSort(acluster->set, (ListMetric)&difference);
+		ListSort(acluster->clear, (ListMetric)&difference);
+		ListSort(bcluster->set, (ListMetric)&difference);
+		ListSort(bcluster->clear, (ListMetric)&difference);
+		if((diff = ListCompare(acluster->set, bcluster->set, (ListMetric)&difference)) || (diff = ListCompare(acluster->clear, bcluster->clear, (ListMetric)&difference))) return diff;
+	}
+	return 0;
+}
+
 /** Entry point.
  @return		Either EXIT_SUCCESS or EXIT_FAILURE. */
 int main(int argc, char **argv) {
-	enum Mode mode = M_HELP;
 	struct Cron c, *pc;
 	struct Misn m, *pm;
 	char read[2048], *r;
 	const int read_size = sizeof read / sizeof(char);
 	int i;
 
-	/* what mode? */
-	if(argc == 2) {
-		if(!strcmp("all", argv[1])) mode = M_ALL;
-		else if(!strcmp("some", argv[1])) mode = M_REMOVE_USELESS;
-		else if(!strcmp("strict", argv[1])) mode = M_STRICT;
-	}
-	if(mode == M_HELP) { usage(); return EXIT_SUCCESS; }
+	/* display help? */
+	if(argc > 1) { usage(); return EXIT_SUCCESS; }
 
 	/* read all */
 
@@ -397,26 +429,22 @@ int main(int argc, char **argv) {
 
 	/* cull crons that do not connect to misns */
 
+	/* combine misns that only differ by one availible-not bit */
+
 	cull_misns_out_degree_zero();
+
+	merge_misns();
 
 	/* print all */
 
-	printf("digraph misn {\n\n");
-
-	/* print bits for all used bits */
-	printf("node [constraint=false shape=plain style=dotted fillcolor=\"#11EE115f\"];\n");
-	for(i = 0; i < bits_size; i++) {
-		if(!bits[i].is_used) continue;
-		printf("bit%d [label=\"%d\"];\n", i, i);
-	}
-	printf("\n");
+	printf("digraph misn {\nrankdir = \"LR\";\n\n");
 
 	/* print misns and vertices */
 	printf("node [shape=Mrecord style=filled fillcolor=\"#1111EE5f\"];\n");
 	for(i = 0; i < misns_size; i++) {
 		pm = misns + i;
 		if(!pm->is_used) continue;
-		printf("misn%d [label=\"%d: %s|{<accept>accept|<refuse>refuse}|<ship>ship|{<success>success|<failure>failure|<abort>abort}\"];\n", pm->id, pm->id, pm->name);
+		printf("misn%d [label=\"{%d: %s|{<accept>accept|<refuse>refuse}|<ship>ship|{<success>success|<failure>failure|<abort>abort}}\"];\n", pm->id, pm->id, pm->name);
 
 		print_edges(i, &pm->b_available, 0, "misn", 0);
 		print_edges(i, &pm->b_accept, &pm->misn_accept, "misn", "accept");
@@ -434,7 +462,7 @@ int main(int argc, char **argv) {
 	for(i = 0; i < crons_size; i++) {
 		pc = crons + i;
 		if(!pc->is_used) continue;
-		printf("cron%d [label=\"%d: %s|{<start>start|<end>end}\"];\n", pc->id, pc->id, pc->name);
+		printf("cron%d [label=\"{%d: %s|{<start>start|<end>end}}\"];\n", pc->id, pc->id, pc->name);
 
 		print_edges(i, &pc->b_enable, 0, "cron", 0);
 		print_edges(i, &pc->b_start, 0, "cron", "start");
@@ -443,13 +471,23 @@ int main(int argc, char **argv) {
 	}
 	printf("\n");
 
+	/* print bits for all used bits */
+	printf("node [constraint=false shape=plain style=dotted fillcolor=\"#11EE115f\"];\n");
+	for(i = 0; i < bits_size; i++) {
+		if(!bits[i].is_used) continue;
+		printf("bit%d [label=\"%d\" constraint=false shape=plain style=dotted fillcolor=\"#11EE115f\"];\n", i, i);
+	}
+	printf("\n");
+
 	printf("}\n");
+
+	/* fixme: free */
 
 	return EXIT_SUCCESS;
 }
 
 /** only the most obvious! (most famous b6666) */
-void cull_bits_reset_by_crons(void) {
+static void cull_bits_reset_by_crons(void) {
 	struct List *ignore_bits = List(sizeof(int));
 	struct Misn *misn;
 	int i, *pbit;
@@ -475,6 +513,7 @@ void cull_bits_reset_by_crons(void) {
 		cron->is_used = 0; /* we don't care about the cron */
 	}
 	fprintf(stderr, "Cron ignore bits: ");
+	ListSort(ignore_bits, (ListMetric)&difference); /* just because */
 	print_ints(ignore_bits);
 	fprintf(stderr, "\n");
 
@@ -491,7 +530,7 @@ void cull_bits_reset_by_crons(void) {
 }
 
 /** nodes who's out degrees are zero are useless */
-void cull_misns_out_degree_zero(void) {
+static void cull_misns_out_degree_zero(void) {
 	int i;
 
 	for(i = M_ACCEPT; i < misns_size; i++) {
@@ -503,7 +542,29 @@ void cull_misns_out_degree_zero(void) {
 			no += ListSize(cluster->set);
 			no += ListSize(cluster->clear);
 		}
-		if(!no) misn->is_used = 0;
+		if(no) continue;
+		misn->is_used = 0;
+		fprintf(stderr, "Misn%d has zero out-degree; it has been repressed.\n", misn->id);
+	}
+}
+
+/** merges the misns that have the same topology */
+static void merge_misns(void) {
+	struct Misn *misn, *nisn;
+	int m, n;
+	char temp[128];
+
+	for(m = 0; m < misns_size; m++) {
+		misn = misns + m;
+		if(!misn->is_used) continue;
+		for(n = m + 1; n < misns_size; n++) {
+			nisn = misns + n;
+			if(!nisn->is_used || misn_compare(misn, nisn)) continue;
+			snprintf(temp, sizeof temp, "\\n%d: %s", nisn->id, nisn->name);
+			strncat(misn->name, temp, misn_name_size);
+			nisn->is_used = 0;
+			fprintf(stderr, "Misn%d merged with Misn%d.\n", nisn->id, misn->id);
+		}
 	}
 }
 
@@ -581,15 +642,13 @@ static void escape(char *const string) {
 
 /** Prints command-line help. */
 static void usage(void) {
-	fprintf(stderr, "Usage: %s [mode] < novadata.tsv > allmisns.gv\n\n", programme);
-	fprintf(stderr, "Where [mode] is one of { all, some, strict }; all does not prune, some does\n");
-	fprintf(stderr, "obvious pruning, and strict prunes it the best.\n\n");
+	fprintf(stderr, "Usage: %s < novadata.tsv > allmisns.gv\n\n", programme);
 	fprintf(stderr, "The input file, eg, novadata.tsv, is misns and crons exported with EVNEW text\n");
 	fprintf(stderr, "1.0.1; the output file, eg, allmisns.gv, is a GraphViz file; see\n");
 	fprintf(stderr, "http://www.graphviz.org/. Then one could get a graph,\n\n");
 	fprintf(stderr, "dot (or fdp, etc) allmisns.gv -O -Tpdf, or use the GUI.\n\n");
 	fprintf(stderr, "Assumes all positive bits can be grouped in a minterm and all negative bits a\n");
-	fprintf(stderr, "maxterm; this is true for stock EV:Nova.\n\n");
+	fprintf(stderr, "maxterm; this is (mostly?) true for stock EV:Nova.\n\n");
 	fprintf(stderr, "Version %d.%d.\n", versionMajor, versionMinor);
 	fprintf(stderr, "%s Copyright %s Neil Edelman\n\n", programme, year);
 }
